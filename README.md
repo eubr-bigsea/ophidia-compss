@@ -1,1 +1,1 @@
-# ophidia-compss
+# Integration among Ophidia and COMPSs
