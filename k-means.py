@@ -1,6 +1,6 @@
 #!/bin/python2
 
-import sys, json, numpy, random
+import sys, json, numpy, random, argparse
 
 from PyOphidia import cube, client
 from pycompss.api.constraint import constraint
@@ -9,22 +9,14 @@ from pycompss.api.parameter import *
 
 #Simple function to get list of values from a cube
 def extractValue(dataCube):
-	dataCube.explore(level=1, limit_filter=10000)
-	data = json.loads(dataCube.client.last_response)
-	valList = []
-	currVal = data['response'][0]['objcontent'][0]['rowvalues']
-	for v in currVal:
-		if ',' in v[1]:
-			numVals = [float(s.strip()) for s in v[1].split(',')]
-		else:
-			numVals = float(v[1].strip())
-		valList.append(numVals)
-	return valList
+
+	data = dataCube.export_array()
+	return data["measure"][0]["values"]
 
 #Function to compute euclidean distance
-@task(dataCube=IN, mu=IN, returns=list)
-def computeDistance(dataCube, mu):
-	cube.Cube.setclient('','','','')
+@task(dataCube=IN, mu=IN, user=IN, pwd=IN, host=IN, port=IN, returns=list)
+def computeDistance(dataCube, mu, user, pwd, host, port):
+	cube.Cube.setclient(user, pwd, host, port)
 
 	#Build query
 	difference=""
@@ -40,7 +32,8 @@ def computeDistance(dataCube, mu):
 	#Run query
 	newCube = dataCube.apply(query=apply_query, measure='Test', check_type='no', ncores=2)
 	values = extractValue(newCube)
-	return values	
+	dist = [v[0] for v in values]
+	return dist
 
 #Function to compute cluster centroids
 @task(cluster=IN, centroid=IN, returns=list)
@@ -51,10 +44,23 @@ def computeCentroids(cluster, centroid):
 		return numpy.mean(cluster, axis = 0).tolist()
 
 if __name__ == "__main__":
+
+	parser = argparse.ArgumentParser(description='K-means implementation with Ophidia and COMPSs')
+	parser.add_argument('-P','--port', default="11732", help='Port of Ophidia instance')
+	parser.add_argument('-H','--hostname', default='127.0.0.1', help='Hostname of the Ophidia instance')
+	parser.add_argument('-u','--username', help='Name of user on the Ophidia instance', required=True)
+	parser.add_argument('-p','--password', help='Password of the account on the Ophidia instance', required=True)
+	args = parser.parse_args()
+
+	port = args.port
+	host = args.hostname
+	user = args.username
+	pwd = args.password
+
 	from pycompss.api.api import compss_wait_on
 
 	#Initialize
-	cube.Cube.setclient('','','','')
+	cube.Cube.setclient(user, pwd, host, port)
 	try:
 		cube.Cube.createcontainer(container="Test",dim='points|features',dim_type='double|double',hierarchy='oph_base|oph_base')
 	except:
@@ -66,8 +72,7 @@ if __name__ == "__main__":
 	K = 8
 	
 	#Create NxM random cube
-	cube.Cube.client.submit("oph_randcube container=Test;nfrag=2;ntuple="+str(N/2)+";measure=Test;measure_type=double;exp_ndim=1;dim=points|features;dim_size="+str(N)+"|"+str(M)+";compressed=no;concept_level=c|c;ncores=2;nhost=1;")
-	dataCube = cube.Cube(pid=cube.Cube.client.cube)
+	dataCube = cube.Cube.randcube(ncores=2, nhost=1, container="Test",nfrag=2, ntuple=str(N/2), measure="Test", measure_type="double", exp_ndim=1, dim="points|features", concept_level='c|c',dim_size=str(N)+"|"+str(M))
 	points = extractValue(dataCube)
 
 	#Create sample for initial centroids
@@ -84,7 +89,7 @@ if __name__ == "__main__":
 		distances = [[] for m in range(0,len(centroids))]
 		#Compute euclidean distances for each centroid
 		for i in range(0,len(centroids)):
-			distances[i].append(computeDistance(dataCube, centroids[i]))
+			distances[i].append(computeDistance(dataCube, centroids[i], user, pwd, host, port))
 
 		distances = compss_wait_on(distances)
 
